@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="kk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Қызметкерлерді тіркеу</title>
+<meta name="theme-color" content="#1d3557">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background:#eef3f8; margin:0; padding:16px; color:#1d3557; }
+  .card { max-width:440px; margin:12px auto; background:#fff; border-radius:18px; padding:22px; box-shadow:0 6px 20px rgba(29,53,87,.10); }
+  .school { font-size:13px; color:#457b9d; text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px; }
+  h1 { margin:0 0 4px; font-size:22px; }
+  .sub { color:#5c6b7a; font-size:14px; margin-bottom:12px; }
+  #clock { font-size:40px; font-weight:700; text-align:center; margin:4px 0 2px; font-variant-numeric: tabular-nums; }
+  #date { text-align:center; color:#5c6b7a; font-size:14px; margin-bottom:16px; }
+  label { display:block; font-size:13px; color:#5c6b7a; margin:0 0 6px; }
+  select { width:100%; padding:13px; font-size:16px; border-radius:12px; border:1px solid #c9d3dd; background:#fff; margin-bottom:12px; color:#1d3557; }
+  .btn { display:block; width:100%; padding:15px; font-size:17px; border:0; border-radius:12px; color:#fff; cursor:pointer; font-weight:600; }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .faceid { background:#1d3557; margin-bottom:12px; }
+  .selfie { background:#f1f7fb; color:#1d3557; border:2px dashed #457b9d; margin-bottom:12px; }
+  .row { display:flex; gap:10px; }
+  .row .btn { flex:1; padding:18px 10px; font-size:18px; }
+  .in { background:#2a9d8f; } .out { background:#e76f51; }
+  #preview { display:none; width:110px; height:110px; object-fit:cover; border-radius:50%; margin:0 auto 12px; border:3px solid #2a9d8f; }
+  .badge { display:inline-block; font-size:12px; padding:4px 10px; border-radius:20px; margin:0 6px 12px 0; background:#e7eef5; color:#1d3557; }
+  .badge.ok { background:#d8f3dc; color:#1b4332; }
+  #msg { margin-top:14px; padding:12px 14px; border-radius:12px; display:none; font-size:15px; line-height:1.4; }
+  .m-ok { background:#d8f3dc; color:#1b4332; } .m-err { background:#ffe5e5; color:#9b2226; } .m-info { background:#e7eef5; color:#1d3557; }
+  .hidden { display:none !important; }
+  .foot { text-align:center; font-size:12px; color:#8a97a4; margin-top:14px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="school">Мектеп</div>
+  <h1>Қызметкерлерді тіркеу</h1>
+  <div class="sub" id="window">Тіркеу уақыты: 09:00–18:00</div>
+  <div id="clock">--:--</div>
+  <div id="date"></div>
+
+  <!-- Әкімші -->
+  <div id="adminBox" class="hidden">
+    <div class="sub">Әкімші режимі. Мектептің ішінде тұрып, батырманы басыңыз.<br>
+      Қазір: <b id="locState">...</b></div>
+    <button class="btn faceid" id="setLocBtn">📍 Мектеп орнын осы жерге бекіту</button>
+  </div>
+
+  <!-- Қызметкер -->
+  <div id="staffBox" class="hidden">
+    <label for="name">Аты-жөніңіз</label>
+    <select id="name"><option value="">— Таңдаңыз —</option></select>
+
+    <div id="badges"></div>
+
+    <button class="btn faceid hidden" id="bindBtn">🔐 Телефонымды Face ID арқылы тіркеу (1 рет)</button>
+
+    <div id="selfieBox" class="hidden">
+      <button class="btn selfie" id="selfieBtn">📷 Селфи түсіру</button>
+      <input id="cam" type="file" accept="image/*" capture="user" class="hidden">
+      <img id="preview" alt="">
+    </div>
+
+    <div class="row">
+      <button class="btn in" id="inBtn">✅ Келді</button>
+      <button class="btn out" id="outBtn">🚪 Кетті</button>
+    </div>
+  </div>
+
+  <div id="msg"></div>
+  <div class="foot">Деректер мектептің Google кестесіне жазылады</div>
+</div>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var KEY = params.get('k') || '';
+  var ADMIN = params.get('admin') || '';
+  var CFG = null, photoB64 = '';
+
+  var $ = function (id) { return document.getElementById(id); };
+  function show(t, type) { var m = $('msg'); m.textContent = t; m.className = 'm-' + (type || 'info'); m.style.display = 'block'; }
+  function busy(v) { document.querySelectorAll('button').forEach(function (b) { b.disabled = v; }); }
+
+  // Сағат
+  var months = ['қаңтар','ақпан','наурыз','сәуір','мамыр','маусым','шілде','тамыз','қыркүйек','қазан','қараша','желтоқсан'];
+  function tick() {
+    var d = new Date();
+    $('clock').textContent = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    $('date').textContent = d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
+  }
+  tick(); setInterval(tick, 5000);
+
+  // base64url көмекшілері
+  function toB64u(buf) {
+    var s = '', b = new Uint8Array(buf);
+    for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function fromB64u(str) {
+    str = str.replace(/-/g, '+').replace(/_/g, '/'); while (str.length % 4) str += '=';
+    var s = atob(str), b = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+    return b.buffer;
+  }
+  function rnd(n) { return crypto.getRandomValues(new Uint8Array(n)); }
+
+  // API
+  function apiGet(q) {
+    return fetch(window.API_URL + '?' + q).then(function (r) { return r.json(); })
+      .then(function (j) { if (!j.ok) throw new Error(j.error); return j; });
+  }
+  function apiPost(body) {
+    return fetch(window.API_URL, { method: 'POST', body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (!j.ok) throw new Error(j.error); return j; });
+  }
+
+  function getPos() {
+    return new Promise(function (res, rej) {
+      if (!navigator.geolocation) return rej(new Error('Бұл телефон геолокацияны қолдамайды.'));
+      navigator.geolocation.getCurrentPosition(function (p) { res(p.coords); },
+        function () { rej(new Error('Орынды анықтау мүмкін болмады. Телефонда геолокацияны қосып, браузерге рұқсат беріңіз.')); },
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+    });
+  }
+
+  // Face ID: телефонды тіркеу
+  function bindDevice() {
+    var name = $('name').value;
+    if (!name) return show('Алдымен аты-жөніңізді таңдаңыз.', 'err');
+    if (!window.PublicKeyCredential) return show('Бұл браузер Face ID-ді қолдамайды. Safari (iPhone) немесе Chrome (Android) арқылы ашыңыз.', 'err');
+    busy(true); show('Face ID / саусақ ізін растаңыз...', 'info');
+    navigator.credentials.create({ publicKey: {
+      challenge: rnd(32),
+      rp: { name: 'Мектеп: қызметкерлерді тіркеу' },
+      user: { id: rnd(16), name: name, displayName: name },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
+      attestation: 'none', timeout: 60000
+    }}).then(function (cred) {
+      var credId = toB64u(cred.rawId);
+      return apiPost({ op: 'bindDevice', key: KEY, name: name, credId: credId }).then(function (j) {
+        CFG.devices[name] = credId; refresh(); show('✔ ' + j.msg, 'ok');
+      });
+    }).catch(function (e) { show(errText(e), 'err'); }).then(function () { busy(false); });
+  }
+
+  // Face ID: тексеру
+  function verifyFace(name) {
+    var credId = CFG.devices[name];
+    if (!credId) return Promise.reject(new Error('Алдымен телефоныңызды Face ID арқылы тіркеңіз.'));
+    return navigator.credentials.get({ publicKey: {
+      challenge: rnd(32),
+      allowCredentials: [{ type: 'public-key', id: fromB64u(credId) }],
+      userVerification: 'required', timeout: 60000
+    }}).then(function (a) { return toB64u(a.rawId); });
+  }
+
+  function errText(e) {
+    if (e && e.name === 'NotAllowedError') return 'Face ID расталмады немесе бас тартылды. Қайталап көріңіз.';
+    if (e && e.name === 'InvalidStateError') return 'Бұл телефонда Face ID кілті бұрын жасалған.';
+    return (e && e.message) || 'Қате шықты.';
+  }
+
+  function inWindow() {
+    var h = new Date().getHours();
+    return h >= CFG.startHour && h < CFG.endHour;
+  }
+
+  function send(action) {
+    var name = $('name').value;
+    if (!name) return show('Алдымен аты-жөніңізді таңдаңыз.', 'err');
+    if (!inWindow()) return show('Тіркеу тек ' + CFG.window + ' аралығында жұмыс істейді.', 'err');
+    if (CFG.needPhoto && !photoB64) return show('Алдымен селфи түсіріңіз.', 'err');
+    try { localStorage.setItem('staffName', name); } catch (e) {}
+    busy(true);
+    var data = { op: 'checkin', key: KEY, name: name, action: action, photo: photoB64 };
+
+    var chain = Promise.resolve();
+    if (CFG.needFaceId) chain = chain.then(function () {
+      show('Face ID / саусақ ізін растаңыз...', 'info');
+      return verifyFace(name).then(function (id) { data.credId = id; });
+    });
+    if (CFG.needGps) chain = chain.then(function () {
+      show('Орын анықталуда...', 'info');
+      return getPos().then(function (c) { data.lat = c.latitude; data.lng = c.longitude; });
+    });
+    chain.then(function () {
+      show('Жіберілуде...', 'info');
+      return apiPost(data);
+    }).then(function (j) {
+      show('✔ ' + j.msg, 'ok');
+      photoB64 = ''; $('preview').style.display = 'none';
+    }).catch(function (e) { show(errText(e), 'err'); })
+      .then(function () { busy(false); });
+  }
+
+  function refresh() {
+    var name = $('name').value, has = !!(name && CFG.devices[name]);
+    var b = '';
+    if (CFG.needFaceId) b += '<span class="badge ' + (has ? 'ok' : '') + '">' + (has ? '🔐 Face ID тіркелген' : '🔐 Face ID тіркелмеген') + '</span>';
+    if (CFG.needGps) b += '<span class="badge">📍 Тек мектеп аумағында</span>';
+    $('badges').innerHTML = b;
+    $('bindBtn').classList.toggle('hidden', !(CFG.needFaceId && name && !has));
+  }
+
+  // Селфи
+  $('selfieBtn').onclick = function () { $('cam').click(); };
+  $('cam').onchange = function () {
+    var f = this.files && this.files[0]; if (!f) return;
+    var fr = new FileReader();
+    fr.onload = function () {
+      var img = new Image();
+      img.onload = function () {
+        var max = 640, k = Math.min(1, max / Math.max(img.width, img.height));
+        var c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        var url = c.toDataURL('image/jpeg', 0.7);
+        photoB64 = url.split(',')[1]; $('preview').src = url; $('preview').style.display = 'block';
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(f);
+  };
+
+  $('bindBtn').onclick = bindDevice;
+  $('inBtn').onclick = function () { send('Келді'); };
+  $('outBtn').onclick = function () { send('Кетті'); };
+  $('name').onchange = refresh;
+
+  $('setLocBtn').onclick = function () {
+    busy(true); show('Орын анықталуда...', 'info');
+    getPos().then(function (c) {
+      return apiPost({ op: 'setLoc', admin: ADMIN, lat: c.latitude, lng: c.longitude }).then(function (j) {
+        $('locState').textContent = 'мектеп орны бекітілген';
+        show('✔ ' + j.msg + ' (дәлдік ±' + Math.round(c.accuracy) + ' м)', 'ok');
+      });
+    }).catch(function (e) { show(errText(e), 'err'); }).then(function () { busy(false); });
+  };
+
+  // Іске қосу
+  if (!window.API_URL || window.API_URL.indexOf('http') !== 0) {
+    show('Жүйе әлі бапталмаған (config.js ішінде API_URL жоқ).', 'err'); return;
+  }
+  if (!KEY && !ADMIN) { show('Мектептегі QR кодты телефонмен сканерлеп кіріңіз.', 'err'); return; }
+
+  show('Жүктелуде...', 'info');
+  apiGet('api=config&k=' + encodeURIComponent(KEY) + '&admin=' + encodeURIComponent(ADMIN)).then(function (cfg) {
+    CFG = cfg;
+    $('msg').style.display = 'none';
+    $('window').textContent = 'Тіркеу уақыты: ' + cfg.window;
+    if (cfg.isAdmin) {
+      $('adminBox').classList.remove('hidden');
+      $('locState').textContent = cfg.locSet ? 'мектеп орны бекітілген' : 'мектеп орны бекітілмеген';
+      return;
+    }
+    $('staffBox').classList.remove('hidden');
+    $('selfieBox').classList.toggle('hidden', !cfg.needPhoto);
+    cfg.staff.forEach(function (n) { var o = document.createElement('option'); o.value = n; o.textContent = n; $('name').appendChild(o); });
+    try { var s = localStorage.getItem('staffName'); if (s && cfg.staff.indexOf(s) !== -1) $('name').value = s; } catch (e) {}
+    refresh();
+    if (!inWindow()) show('Қазір тіркеу жабық. Тіркеу уақыты: ' + cfg.window, 'err');
+  }).catch(function (e) { show(errText(e), 'err'); });
+})();
+</script>
+</body>
+</html>
